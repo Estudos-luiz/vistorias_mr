@@ -1,0 +1,13 @@
+{
+  "name": "vistorias-admin",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Painel de administrador das vistorias (Vercel + Neon)",
+  "dependencies": {
+    "@neondatabase/serverless": ">=0.10.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
