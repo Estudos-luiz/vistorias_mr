@@ -15,7 +15,11 @@
   header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 20px; background: var(--card); border-bottom: 1px solid var(--linha); }
   h1 { font-size: 18px; margin: 0 auto 0 0; }
   header label { color: var(--mut); font-size: 13px; }
-  input[type=date], input[type=password] { font: inherit; padding: 6px 8px; border: 1px solid var(--linha); border-radius: 6px; background: #fff; color: var(--txt); }
+  select { font: inherit; padding: 6px 8px; border: 1px solid var(--linha); border-radius: 6px; background: #fff; color: var(--txt); }
+  [hidden] { display: none !important; }
+  button.perigo { color: var(--bad); border-color: var(--bad); }
+  button.perigo:hover { background: var(--bad); color: #fff; }
+  input[type=date], input[type=month], input[type=password] { font: inherit; padding: 6px 8px; border: 1px solid var(--linha); border-radius: 6px; background: #fff; color: var(--txt); }
   button { font: inherit; cursor: pointer; padding: 6px 12px; border: 1px solid var(--linha); border-radius: 6px; background: #fff; color: var(--txt); }
   button:hover { border-color: var(--acc); }
   button.pri { background: var(--acc); border-color: var(--acc); color: #fff; }
@@ -44,9 +48,14 @@
 
 <header>
   <h1>Painel de Vistorias</h1>
-  <label>Dia <input type="date" id="dia"></label>
+  <label>Ver
+    <select id="modo"><option value="dia">Dia</option><option value="mes">Mês</option></select>
+  </label>
+  <input type="date" id="dia" aria-label="Dia">
+  <input type="month" id="mes" aria-label="Mês" hidden>
   <button id="atualizar">Atualizar agora</button>
   <button id="csv">Baixar CSV</button>
+  <button id="apagar" class="perigo" hidden>Apagar mês</button>
   <button id="sair">Sair</button>
 </header>
 
@@ -79,6 +88,13 @@
   var ultimo = null, emAndamento = false, timer = null;
 
   function hojeSP() { return new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10); }
+  function mesSP() { return hojeSP().slice(0, 7); }
+  function modoMes() { return $('modo').value === 'mes'; }
+  function periodoAtual() { return modoMes() ? ($('mes').value || mesSP()) : ($('dia').value || hojeSP()); }
+  function nomeMes(m) {
+    var n = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+    return n[Number(m.slice(5)) - 1] + ' de ' + m.slice(0, 4);
+  }
   function minutosSP() { var d = new Date(Date.now() - 3 * 3600e3); return d.getUTCHours() * 60 + d.getUTCMinutes(); }
   function hhmm(iso) {
     if (!iso) return '–';
@@ -90,7 +106,7 @@
 
   function motivoPausa() {
     if (document.visibilityState !== 'visible') return 'aba em segundo plano';
-    if ($('dia').value !== hojeSP()) return 'dia passado (sem atualização automática)';
+    if (modoMes() ? $('mes').value !== mesSP() : $('dia').value !== hojeSP()) return (modoMes() ? 'mês passado' : 'dia passado') + ' (sem atualização automática)';
     if (new Date(Date.now() - 3 * 3600e3).getUTCDay() === 0) return 'domingo (sem expediente)';
     var m = minutosSP();
     if (m < HORA_INI || m >= HORA_FIM) return 'fora do horário (07:00–20:00)';
@@ -107,7 +123,7 @@
     var box = $('tabela'); box.innerHTML = '';
     if (!d.linhas.length) {
       var v = document.createElement('div'); v.className = 'vazio';
-      v.textContent = 'Nenhuma vistoria registrada neste dia.'; box.appendChild(v); return;
+      v.textContent = 'Nenhuma vistoria registrada ' + (d.tipo === 'mes' ? 'neste mês.' : 'neste dia.'); box.appendChild(v); return;
     }
     var t = document.createElement('table');
     var cab = ['Nome', 'Aprovados', 'Reprovados', 'Bloqueados', 'Total_Geral', 'Última'];
@@ -142,12 +158,13 @@
     if (!manual && pausa) { estado('Atualização automática pausada: ' + pausa + (ultimo ? ' · último dado às ' + hhmm(ultimo.atualizado) : ''), 'pausa'); return; }
     emAndamento = true;
     try {
-      var r = await fetch('/api/resumo?dia=' + encodeURIComponent($('dia').value || hojeSP()), { headers: { 'x-admin-password': senha } });
+      var param = modoMes() ? 'mes=' : 'dia=';
+      var r = await fetch('/api/resumo?' + param + encodeURIComponent(periodoAtual()), { headers: { 'x-admin-password': senha } });
       if (r.status === 401) { senha = ''; try { sessionStorage.removeItem('adm'); } catch (e) {} mostrarLogin('Senha incorreta.'); return; }
       var d = await r.json();
       if (!r.ok || !d.ok) throw new Error(d && d.erro ? d.erro : 'Erro ' + r.status);
       ultimo = d; desenhar(d);
-      estado('Atualizado às ' + hhmm(d.atualizado) + ' · ' + fmt(d.total.total) + ' vistorias no dia');
+      estado('Atualizado às ' + hhmm(d.atualizado) + ' · ' + fmt(d.total.total) + ' vistorias ' + (d.tipo === 'mes' ? 'em ' + nomeMes(d.periodo) : 'no dia'));
     } catch (e) {
       estado('Não consegui atualizar: ' + e.message, 'erro');
     } finally { emAndamento = false; }
@@ -159,11 +176,53 @@
     linhas.push(['TOTAL', ultimo.total.aprovados, ultimo.total.reprovados, ultimo.total.bloqueados, ultimo.total.total, ''].join(';'));
     ultimo.linhas.forEach(function (l) { linhas.push([l.nome.replace(/;/g, ','), l.aprovados, l.reprovados, l.bloqueados, l.total, hhmm(l.ultima)].join(';')); });
     var blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
-    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'vistorias-' + ultimo.dia + '.csv';
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'vistorias-' + ultimo.periodo + '.csv';
     document.body.appendChild(a); a.click(); a.remove();
   }
 
+  // Apagar mês: mostra o que será apagado e exige digitar o mês (AAAA-MM) para confirmar. Não tem volta.
+  async function apagarMes() {
+    var mes = $('mes').value;
+    if (!modoMes() || !/^\d{4}-\d{2}$/.test(mes)) { estado('Escolha o mês que quer apagar.', 'erro'); return; }
+    if (!senha) { mostrarLogin(''); return; }
+    var qtd = ultimo && ultimo.tipo === 'mes' && ultimo.periodo === mes ? fmt(ultimo.total.total) + ' vistorias' : 'todas as vistorias';
+    var resp = window.prompt(
+      'ATENÇÃO: isto apaga ' + qtd + ' de ' + nomeMes(mes) + ' do banco, para todos os operadores.\n' +
+      'Não tem como desfazer. Se precisar, baixe o CSV antes.\n\n' +
+      'Para confirmar, digite o mês exatamente assim: ' + mes
+    );
+    if (resp === null) return;
+    if (resp.trim() !== mes) { estado('Confirmação não confere. Nada foi apagado.', 'erro'); return; }
+    emAndamento = true;
+    try {
+      var r = await fetch('/api/apagar', {
+        method: 'POST',
+        headers: { 'x-admin-password': senha, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mes: mes, confirmar: resp.trim() })
+      });
+      if (r.status === 401) { senha = ''; try { sessionStorage.removeItem('adm'); } catch (e) {} mostrarLogin('Senha incorreta.'); return; }
+      var d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d && d.erro ? d.erro : 'Erro ' + r.status);
+      emAndamento = false;
+      await carregar(true);
+      estado('Mês ' + nomeMes(mes) + ' apagado: ' + fmt(d.apagadas) + ' vistorias removidas.');
+    } catch (e) {
+      estado('Não consegui apagar: ' + e.message, 'erro');
+    } finally { emAndamento = false; }
+  }
+
+  function trocarModo() {
+    var m = modoMes();
+    $('dia').hidden = m; $('mes').hidden = !m; $('apagar').hidden = !m;
+    if (m && !$('mes').value) $('mes').value = ($('dia').value || hojeSP()).slice(0, 7);
+    carregar(true);
+  }
+
   $('dia').value = hojeSP();
+  $('mes').value = mesSP();
+  $('modo').addEventListener('change', trocarModo);
+  $('mes').addEventListener('change', function () { carregar(true); });
+  $('apagar').onclick = apagarMes;
   $('dia').addEventListener('change', function () { carregar(true); });
   $('atualizar').onclick = function () { carregar(true); };
   $('csv').onclick = baixarCSV;
