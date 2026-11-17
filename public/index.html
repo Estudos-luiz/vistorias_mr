@@ -72,7 +72,7 @@
 (function () {
   'use strict';
   var INTERVALO_MS = 10000;                 // consulta a cada 10 s
-  var HORA_INI = 6 * 60 + 30, HORA_FIM = 21 * 60;   // só atualiza sozinho entre 06:30 e 21:00 (Brasília)
+  var HORA_INI = 7 * 60, HORA_FIM = 20 * 60;        // só atualiza sozinho de segunda a sábado, das 07:00 às 20:00 (Brasília)
   var $ = function (id) { return document.getElementById(id); };
   var senha = '';
   try { senha = sessionStorage.getItem('adm') || ''; } catch (e) {}
@@ -91,8 +91,9 @@
   function motivoPausa() {
     if (document.visibilityState !== 'visible') return 'aba em segundo plano';
     if ($('dia').value !== hojeSP()) return 'dia passado (sem atualização automática)';
+    if (new Date(Date.now() - 3 * 3600e3).getUTCDay() === 0) return 'domingo (sem expediente)';
     var m = minutosSP();
-    if (m < HORA_INI || m >= HORA_FIM) return 'fora do horário (06:30–21:00)';
+    if (m < HORA_INI || m >= HORA_FIM) return 'fora do horário (07:00–20:00)';
     return '';
   }
 
