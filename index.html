@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Painel de Vistorias</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --txt: #1d2327; --mut: #6b7780; --linha: #d9dde1;
+    --cab: #eceff1; --zebra: #e6f0fa; --acc: #1f6feb; --ok: #1a8f4d; --bad: #c0392b; --blk: #b9770e;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt); font: 14px/1.4 system-ui, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 20px; background: var(--card); border-bottom: 1px solid var(--linha); }
+  h1 { font-size: 18px; margin: 0 auto 0 0; }
+  header label { color: var(--mut); font-size: 13px; }
+  input[type=date], input[type=password] { font: inherit; padding: 6px 8px; border: 1px solid var(--linha); border-radius: 6px; background: #fff; color: var(--txt); }
+  button { font: inherit; cursor: pointer; padding: 6px 12px; border: 1px solid var(--linha); border-radius: 6px; background: #fff; color: var(--txt); }
+  button:hover { border-color: var(--acc); }
+  button.pri { background: var(--acc); border-color: var(--acc); color: #fff; }
+  main { padding: 16px 20px 40px; max-width: 980px; margin: 0 auto; }
+  .estado { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; color: var(--mut); font-size: 12.5px; margin-bottom: 10px; min-height: 20px; }
+  .pausa { color: var(--blk); font-weight: 600; }
+  .erro { color: var(--bad); font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; background: var(--card); border: 1px solid var(--linha); font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 12px; border: 1px solid var(--linha); text-align: left; white-space: nowrap; }
+  th { background: var(--cab); font-weight: 600; font-size: 13px; }
+  td.n, th.n { text-align: right; }
+  tbody tr:nth-child(even) { background: var(--zebra); }
+  tbody tr.tot { background: #fff; font-weight: 700; }
+  tbody tr.tot td { border-bottom: 2px solid #9aa5ad; }
+  td.nome { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+  .vazio { padding: 28px; text-align: center; color: var(--mut); background: var(--card); border: 1px solid var(--linha); }
+  .nota { margin-top: 14px; color: var(--mut); font-size: 12px; }
+  #login { position: fixed; inset: 0; background: #0009; display: none; align-items: center; justify-content: center; padding: 16px; }
+  #login.on { display: flex; }
+  #login form { background: #fff; padding: 22px; border-radius: 12px; width: 320px; max-width: 100%; display: grid; gap: 12px; }
+  #login h2 { margin: 0; font-size: 16px; }
+  #login p { margin: 0; min-height: 18px; color: var(--bad); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Painel de Vistorias</h1>
+  <label>Dia <input type="date" id="dia"></label>
+  <button id="atualizar">Atualizar agora</button>
+  <button id="csv">Baixar CSV</button>
+  <button id="sair">Sair</button>
+</header>
+
+<main>
+  <div class="estado"><span id="st">Carregando…</span></div>
+  <div id="tabela"></div>
+  <p class="nota">
+    Reprovados não inclui os bloqueados (como na consulta do banco). Total = Aprovados + Reprovados + Bloqueados.
+    Os números vêm dos cliques em "Finalizar" do script de cada operador, então podem divergir um pouco do sistema oficial.
+  </p>
+</main>
+
+<div id="login">
+  <form id="fl">
+    <h2>Acesso do administrador</h2>
+    <input type="password" id="senha" placeholder="Senha" autocomplete="current-password" required>
+    <p id="msg"></p>
+    <button class="pri" type="submit">Entrar</button>
+  </form>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var INTERVALO_MS = 10000;                 // consulta a cada 10 s
+  var HORA_INI = 6 * 60 + 30, HORA_FIM = 21 * 60;   // só atualiza sozinho entre 06:30 e 21:00 (Brasília)
+  var $ = function (id) { return document.getElementById(id); };
+  var senha = '';
+  try { senha = sessionStorage.getItem('adm') || ''; } catch (e) {}
+  var ultimo = null, emAndamento = false, timer = null;
+
+  function hojeSP() { return new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10); }
+  function minutosSP() { var d = new Date(Date.now() - 3 * 3600e3); return d.getUTCHours() * 60 + d.getUTCMinutes(); }
+  function hhmm(iso) {
+    if (!iso) return '–';
+    var d = new Date(new Date(iso).getTime() - 3 * 3600e3);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getUTCHours()) + ':' + p(d.getUTCMinutes()) + ':' + p(d.getUTCSeconds());
+  }
+  function fmt(n) { return Number(n || 0).toLocaleString('pt-BR'); }
+
+  function motivoPausa() {
+    if (document.visibilityState !== 'visible') return 'aba em segundo plano';
+    if ($('dia').value !== hojeSP()) return 'dia passado (sem atualização automática)';
+    var m = minutosSP();
+    if (m < HORA_INI || m >= HORA_FIM) return 'fora do horário (06:30–21:00)';
+    return '';
+  }
+
+  function mostrarLogin(msg) {
+    $('msg').textContent = msg || '';
+    $('login').classList.add('on');
+    setTimeout(function () { $('senha').focus(); }, 50);
+  }
+
+  function desenhar(d) {
+    var box = $('tabela'); box.innerHTML = '';
+    if (!d.linhas.length) {
+      var v = document.createElement('div'); v.className = 'vazio';
+      v.textContent = 'Nenhuma vistoria registrada neste dia.'; box.appendChild(v); return;
+    }
+    var t = document.createElement('table');
+    var cab = ['Nome', 'Aprovados', 'Reprovados', 'Bloqueados', 'Total_Geral', 'Última'];
+    var th = '<thead><tr>' + cab.map(function (c, i) { return '<th' + (i > 0 && i < 5 ? ' class="n"' : '') + '>' + c + '</th>'; }).join('') + '</tr></thead>';
+    t.innerHTML = th;
+    var tb = document.createElement('tbody');
+    function linha(nome, o, ultima, cls) {
+      var tr = document.createElement('tr'); if (cls) tr.className = cls;
+      var vals = [nome, fmt(o.aprovados), fmt(o.reprovados), fmt(o.bloqueados), fmt(o.total), ultima];
+      vals.forEach(function (x, i) {
+        var td = document.createElement('td');
+        if (i === 0) td.className = 'nome'; else if (i < 5) td.className = 'n';
+        td.textContent = x; if (i === 0) td.title = x;
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    }
+    linha('TOTAL', d.total, '', 'tot');
+    d.linhas.forEach(function (l) { linha(l.nome, l, hhmm(l.ultima), ''); });
+    t.appendChild(tb); box.appendChild(t);
+  }
+
+  function estado(extra, classe) {
+    var el = $('st'); el.className = classe || '';
+    el.textContent = extra;
+  }
+
+  async function carregar(manual) {
+    if (emAndamento) return;
+    if (!senha) { mostrarLogin(''); return; }
+    var pausa = motivoPausa();
+    if (!manual && pausa) { estado('Atualização automática pausada: ' + pausa + (ultimo ? ' · último dado às ' + hhmm(ultimo.atualizado) : ''), 'pausa'); return; }
+    emAndamento = true;
+    try {
+      var r = await fetch('/api/resumo?dia=' + encodeURIComponent($('dia').value || hojeSP()), { headers: { 'x-admin-password': senha } });
+      if (r.status === 401) { senha = ''; try { sessionStorage.removeItem('adm'); } catch (e) {} mostrarLogin('Senha incorreta.'); return; }
+      var d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d && d.erro ? d.erro : 'Erro ' + r.status);
+      ultimo = d; desenhar(d);
+      estado('Atualizado às ' + hhmm(d.atualizado) + ' · ' + fmt(d.total.total) + ' vistorias no dia');
+    } catch (e) {
+      estado('Não consegui atualizar: ' + e.message, 'erro');
+    } finally { emAndamento = false; }
+  }
+
+  function baixarCSV() {
+    if (!ultimo) return;
+    var linhas = ['nome;aprovados;reprovados;bloqueados;total_geral;ultima'];
+    linhas.push(['TOTAL', ultimo.total.aprovados, ultimo.total.reprovados, ultimo.total.bloqueados, ultimo.total.total, ''].join(';'));
+    ultimo.linhas.forEach(function (l) { linhas.push([l.nome.replace(/;/g, ','), l.aprovados, l.reprovados, l.bloqueados, l.total, hhmm(l.ultima)].join(';')); });
+    var blob = new Blob(['﻿' + linhas.join('\n')], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'vistorias-' + ultimo.dia + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  $('dia').value = hojeSP();
+  $('dia').addEventListener('change', function () { carregar(true); });
+  $('atualizar').onclick = function () { carregar(true); };
+  $('csv').onclick = baixarCSV;
+  $('sair').onclick = function () { senha = ''; try { sessionStorage.removeItem('adm'); } catch (e) {} $('tabela').innerHTML = ''; estado(''); mostrarLogin(''); };
+  $('fl').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    senha = $('senha').value; $('senha').value = '';
+    try { sessionStorage.setItem('adm', senha); } catch (e) {}
+    $('login').classList.remove('on'); carregar(true);
+  });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') carregar(false); });
+
+  timer = setInterval(function () { carregar(false); }, INTERVALO_MS);
+  carregar(true);
+})();
+</script>
+</body>
+</html>
