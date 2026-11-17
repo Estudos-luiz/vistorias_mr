@@ -1,12 +1,12 @@
-import { db, segredoIgual, hojeSP } from '../lib/comum.js';
+import { db, segredoIgual, hojeSP, intervaloDia, intervaloMes, cache } from '../lib/comum.js';
 
-// Devolve a tabela do painel: uma linha por operador + total do dia.
+// Devolve a tabela do painel: uma linha por operador + total.
+//   GET /api/resumo?dia=AAAA-MM-DD   -> um dia
+//   GET /api/resumo?mes=AAAA-MM      -> um mês inteiro
 // Protegido pela senha do administrador (cabeçalho x-admin-password).
 // Guarda o resultado por 5 segundos para vários administradores não gerarem várias consultas ao banco.
 
-const cache = new Map(); // dia -> { t, dados }
 const TTL_MS = 5000;
-
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default async function handler(req, res) {
@@ -21,14 +21,21 @@ export default async function handler(req, res) {
     return res.status(401).json({ ok: false, erro: 'Senha incorreta' });
   }
 
-  let dia = String((req.query && req.query.dia) || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dia) || Number.isNaN(Date.parse(dia))) dia = hojeSP();
+  const q = req.query || {};
+  let tipo = 'dia', periodo, faixa;
+  if (q.mes) {
+    faixa = intervaloMes(String(q.mes));
+    if (faixa) { tipo = 'mes'; periodo = String(q.mes); }
+  }
+  if (!faixa) {
+    periodo = String(q.dia || '');
+    faixa = intervaloDia(periodo);
+    if (!faixa) { periodo = hojeSP(); faixa = intervaloDia(periodo); }
+  }
 
-  const em = cache.get(dia);
+  const chave = tipo + ':' + periodo;
+  const em = cache.get(chave);
   if (em && Date.now() - em.t < TTL_MS) return res.status(200).json(em.dados);
-
-  const ini = new Date(`${dia}T00:00:00-03:00`);
-  const fim = new Date(ini.getTime() + 24 * 3600 * 1000);
 
   try {
     const sql = db();
@@ -40,8 +47,8 @@ export default async function handler(req, res) {
              count(*)::int                                                            as total,
              max(criado_em)                                                           as ultima
         from vistorias
-       where criado_em >= ${ini.toISOString()}::timestamptz
-         and criado_em <  ${fim.toISOString()}::timestamptz
+       where criado_em >= ${faixa.ini.toISOString()}::timestamptz
+         and criado_em <  ${faixa.fim.toISOString()}::timestamptz
        group by operador
        order by total desc, operador`;
 
@@ -64,9 +71,9 @@ export default async function handler(req, res) {
       { aprovados: 0, reprovados: 0, bloqueados: 0, total: 0 }
     );
 
-    const dados = { ok: true, dia, atualizado: new Date().toISOString(), total, linhas };
-    cache.set(dia, { t: Date.now(), dados });
-    if (cache.size > 10) cache.delete(cache.keys().next().value);
+    const dados = { ok: true, tipo, periodo, atualizado: new Date().toISOString(), total, linhas };
+    cache.set(chave, { t: Date.now(), dados });
+    if (cache.size > 20) cache.delete(cache.keys().next().value);
     return res.status(200).json(dados);
   } catch (e) {
     console.error('Erro ao consultar o banco:', e);
